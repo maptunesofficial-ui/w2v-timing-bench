@@ -1,0 +1,28 @@
+name: w2v-sim
+on: workflow_dispatch
+jobs:
+  sim:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: python3 -m venv v && ./v/bin/pip install -q torch==2.5.1 transformers==4.46.3 onnx==1.17.0 numpy==1.26.4
+      - run: |
+          mkdir -p Resources
+          curl -fL -o jfk.wav https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav
+          curl -fL -o vocab_base.json https://huggingface.co/facebook/wav2vec2-base-960h/resolve/main/vocab.json
+          ./v/bin/python export.py
+          brew install xcodegen && xcodegen
+      - name: build for simulator
+        run: xcodebuild -project W2VBench.xcodeproj -scheme W2VBench -sdk iphonesimulator -configuration Release -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO -derivedDataPath dd build | tail -5
+      - name: run in simulator, capture console and crash reports
+        run: |
+          DEV=$(xcrun simctl list devices available | grep -m1 "iPhone" | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
+          xcrun simctl boot "$DEV"; xcrun simctl install "$DEV" dd/Build/Products/Release-iphonesimulator/W2VBench.app
+          (timeout 420 xcrun simctl launch --console-pty "$DEV" org.w2vbench.app > console.txt 2>&1 || true)
+          grep -a "BENCH" console.txt | head -80 || true
+          tail -5 console.txt
+          mkdir -p crash; cp ~/Library/Logs/DiagnosticReports/*W2VBench* crash/ 2>/dev/null || true
+          ls crash; for f in crash/*; do head -60 "$f"; done
