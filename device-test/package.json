@@ -1,0 +1,9 @@
+{
+  "name": "w2vbench-devicefarm",
+  "version": "1.0.0",
+  "private": false,
+  "main": "bench.js",
+  "files": ["bench.js"],
+  "dependencies": { "webdriverio": "9.32.0" },
+  "license": "MIT"
+}

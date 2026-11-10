@@ -1,0 +1,38 @@
+# Device Farm custom test spec (Appium 2, prebuilt WebDriverAgent): installs the npm-packed test package and runs bench.js
+version: 0.1
+android_test_host: amazon_linux_2
+ios_test_host: macos_sequoia
+phases:
+  install:
+    commands:
+      - export APPIUM_VERSION=2
+      - devicefarm-cli use appium $APPIUM_VERSION || npm install -g appium@2
+      - appium driver list --installed || true
+      - cd $DEVICEFARM_TEST_PACKAGE_PATH
+      - npm install *.tgz --no-audit --no-fund
+  pre_test:
+    commands:
+      - |-
+        APPIUM_DRIVER_VERSION=$(appium driver list --installed --json | jq -r ".xcuitest.version" | cut -d "." -f 1);
+        CORRESPONDING_APPIUM_WDA=$(env | grep "DEVICEFARM_APPIUM_WDA_DERIVED_DATA_PATH_V${APPIUM_DRIVER_VERSION}")
+        if [[ ! -z "$APPIUM_DRIVER_VERSION" ]] && [[ ! -z "$CORRESPONDING_APPIUM_WDA" ]]; then
+          export DEVICEFARM_WDA_DERIVED_DATA_PATH=$(echo $CORRESPONDING_APPIUM_WDA | cut -d "=" -f2)
+        else
+          LATEST=$(env | grep "DEVICEFARM_APPIUM_WDA_DERIVED_DATA_PATH_V" | sort -V -r | head -n 1)
+          export DEVICEFARM_WDA_DERIVED_DATA_PATH=$(echo $LATEST | cut -d "=" -f2)
+        fi
+        echo "WDA: $DEVICEFARM_WDA_DERIVED_DATA_PATH"
+      - |-
+        appium --base-path=/ --log-timestamp --log-no-colors --relaxed-security --default-capabilities "{\"appium:usePrebuiltWDA\": true, \"appium:derivedDataPath\": \"$DEVICEFARM_WDA_DERIVED_DATA_PATH\", \"appium:deviceName\": \"$DEVICEFARM_DEVICE_NAME\", \"appium:platformVersion\": \"$DEVICEFARM_DEVICE_OS_VERSION\", \"appium:udid\": \"$DEVICEFARM_DEVICE_UDID\"}" >> $DEVICEFARM_LOG_DIR/appium.log 2>&1 &
+      - |-
+        for i in $(seq 1 30); do curl -s http://127.0.0.1:4723/status > /dev/null && break; sleep 2; done
+  test:
+    commands:
+      - cd $DEVICEFARM_TEST_PACKAGE_PATH/node_modules/w2vbench-devicefarm
+      - BUDGET_S=1080 node bench.js
+  post_test:
+    commands:
+      - ls -la $DEVICEFARM_SCREENSHOT_PATH || true
+artifacts:
+  - $DEVICEFARM_LOG_DIR
+  - $DEVICEFARM_SCREENSHOT_PATH
