@@ -6,6 +6,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
       - name: python deps (pinned)
         run: python3 -m venv v && ./v/bin/pip install -q torch==2.5.1 transformers==4.46.3 onnx==1.17.0 numpy==1.26.4
       - name: public clip and vocab
