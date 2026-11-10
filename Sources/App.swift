@@ -55,18 +55,19 @@ struct Ref: Decodable { let ids: [Int]; let T: Int; let V: Int }
 @MainActor final class Model: ObservableObject {
     @Published var rows: [String] = ["starting"]
     var started = false
+    nonisolated func post(_ s: String) { DispatchQueue.main.async { MainActor.assumeIsolated { self.add(s) } } }
     func add(_ s: String) { rows.append(s); print("BENCH " + s) }
 
     func start() {
         if started { return }
         started = true
-        Task.detached(priority: .userInitiated) { [self] in
+        let th = Thread { [self] in
             let b = Bundle.main
             let vocab = try! JSONDecoder().decode([String: Int].self, from: Data(contentsOf: b.url(forResource: "vocab", withExtension: "json")!))
             let refs = try! JSONDecoder().decode([String: Ref].self, from: Data(contentsOf: b.url(forResource: "ref", withExtension: "json")!))
             let clipData = try! Data(contentsOf: b.url(forResource: "clip", withExtension: "f32")!)
             let n = clipData.count / 4
-            await add("INFO cpus=\(ProcessInfo.processInfo.processorCount) ram=\(ProcessInfo.processInfo.physicalMemory / 1048576)MB samples=\(n) base=\(Int(footprintMB()))MB")
+            post("INFO cpus=\(ProcessInfo.processInfo.processorCount) ram=\(ProcessInfo.processInfo.physicalMemory / 1048576)MB samples=\(n) base=\(Int(footprintMB()))MB")
             let env = try! ORTEnv(loggingLevel: .warning)
             // order: cheap first so rows survive a later memory kill
             let plan: [(String, String)] = [("base", "cpu"), ("large", "cpu"), ("base", "coreml-all"), ("base", "coreml-gpu"), ("large", "coreml-all")]
@@ -83,13 +84,15 @@ struct Ref: Decodable { let ids: [Int]; let T: Int; let V: Int }
                         if ep == "coreml-gpu" { co.useCPUAndGPU = true }
                         try so.appendCoreMLExecutionProvider(with: co)
                     }
+                    post("INFO step create-session")
                     let session = try ORTSession(env: env, modelPath: path, sessionOptions: so)
-                    await add("LOAD \(name) \(ep) ms=\(Int(nowMs() - t0)) foot=\(Int(footprintMB()))MB")
+                    post("LOAD \(name) \(ep) ms=\(Int(nowMs() - t0)) foot=\(Int(footprintMB()))MB")
                     peak = max(peak, footprintMB())
                     var lastLogits = [Float](); var T = 0, V = 0
                     for run in 0..<5 {
                         let data = NSMutableData(data: clipData)
                         let input = try ORTValue(tensorData: data, elementType: .float, shape: [1, NSNumber(value: n)])
+                        post("INFO step run")
                         let t1 = nowMs()
                         let outs = try session.run(withInputs: ["input_values": input], outputNames: ["logits"], runOptions: nil)
                         let ms = nowMs() - t1
@@ -99,12 +102,12 @@ struct Ref: Decodable { let ids: [Int]; let T: Int; let V: Int }
                         let td = try out.tensorData() as Data
                         lastLogits = td.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
                         peak = max(peak, footprintMB())
-                        await add("R|\(name)|\(ep)|run\(run)\(run == 0 ? "(cold)" : "")|ms=\(Int(ms))|foot=\(Int(footprintMB()))|peak=\(Int(peak))|th=\(thermal())")
+                        post("R|\(name)|\(ep)|run\(run)\(run == 0 ? "(cold)" : "")|ms=\(Int(ms))|foot=\(Int(footprintMB()))|peak=\(Int(peak))|th=\(thermal())")
                     }
                     // sanity: argmax agreement with the PyTorch reference
                     var agree = 0
                     for t in 0..<T { var bi = 0; for v in 1..<V where lastLogits[t * V + v] > lastLogits[t * V + bi] { bi = v }; if let r = refs[name], t < r.ids.count, r.ids[t] == bi { agree += 1 } }
-                    await add("ACC|\(name)|\(ep)|argmax_agree=\(agree)/\(T)")
+                    post("ACC|\(name)|\(ep)|argmax_agree=\(agree)/\(T)")
                     // CTC candidate scoring: 260 candidate strings (the heavy-route size) scored against the one pass of logits
                     let lp = logSoftmax(lastLogits, T: T, V: V)
                     let words = ["AND", "SO", "MY", "FELLOW", "AMERICANS", "ASK", "NOT", "WHAT", "YOUR", "COUNTRY", "CAN", "DO", "FOR", "YOU"]
@@ -117,13 +120,15 @@ struct Ref: Decodable { let ids: [Int]; let T: Int; let V: Int }
                     let d0 = nowMs()
                     var best = -Double.infinity
                     for c in cands { best = max(best, ctcLogProb(lp, T: T, V: V, target: c)) }
-                    await add("DP|\(name)|\(ep)|cands=260|len~\(cands[0].count)|ms=\(Int(nowMs() - d0))|best=\(String(format: "%.1f", best))")
+                    post("DP|\(name)|\(ep)|cands=260|len~\(cands[0].count)|ms=\(Int(nowMs() - d0))|best=\(String(format: "%.1f", best))")
                 } catch {
-                    await add("ERR \(name) \(ep) \(String(describing: error).prefix(160))")
+                    post("ERR \(name) \(ep) \(String(describing: error).prefix(160))")
                 }
             }
-            await add("DONE")
+            post("DONE")
         }
+        th.stackSize = 256 << 20
+        th.start()
     }
 }
 
