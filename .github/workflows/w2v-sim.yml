@@ -21,7 +21,8 @@ jobs:
         run: |
           DEV=$(xcrun simctl list devices available | grep -m1 "iPhone" | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
           xcrun simctl boot "$DEV"; xcrun simctl install "$DEV" dd/Build/Products/Release-iphonesimulator/W2VBench.app
-          (timeout 420 xcrun simctl launch --console-pty "$DEV" org.w2vbench.app > console.txt 2>&1 || true)
+          xcrun simctl launch --console "$DEV" org.w2vbench.app > console.txt 2>&1 &
+          sleep 300; pkill -f "simctl launch" || true
           grep -a "BENCH" console.txt | head -80 || true
           tail -5 console.txt
           mkdir -p crash; cp ~/Library/Logs/DiagnosticReports/*W2VBench* crash/ 2>/dev/null || true
