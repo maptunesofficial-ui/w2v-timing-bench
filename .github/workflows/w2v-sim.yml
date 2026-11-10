@@ -1,5 +1,7 @@
 name: w2v-sim
 on: workflow_dispatch
+permissions:
+  contents: write
 jobs:
   sim:
     runs-on: macos-15
@@ -26,4 +28,7 @@ jobs:
           grep -a "BENCH" console.txt | head -80 || true
           tail -5 console.txt
           mkdir -p crash; cp ~/Library/Logs/DiagnosticReports/*W2VBench* crash/ 2>/dev/null || true
-          ls crash; for f in crash/*; do head -60 "$f"; done
+          ls crash || true
+          mkdir -p out && cp console.txt out/ && (cp crash/* out/ 2>/dev/null || true)
+          git config user.name bench && git config user.email bench@users.noreply.github.com
+          git checkout -b simout && git add -f out && git commit -qm simout && git push -f origin simout
